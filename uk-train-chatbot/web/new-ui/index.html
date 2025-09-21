@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>UK Train Bot</title>
+
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React 18 + Babel (CDN, zero-build) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    :root { color-scheme: light dark; }
+    body { background: #0b1220; }
+    .card { background: #0f172a; border: 1px solid #1f2937; }
+    .muted { color: #94a3b8; }
+    .ok { color: #22c55e; }
+    .warn { color: #f59e0b; }
+    .bad { color: #ef4444; }
+    .btn { @apply px-3 py-2 rounded-lg text-sm font-medium; }
+    .btn-primary { background:#2563eb; color:white; }
+    .btn-secondary { background:#334155; color:#e5e7eb; }
+    .btn-ghost { background:transparent; color:#e5e7eb; border:1px solid #334155; }
+    input, textarea { background:#0b1020; border:1px solid #334155; color:#e5e7eb; }
+    table td, table th { border-bottom: 1px solid #1f2937; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="text-slate-100">
+  <div id="root" class="max-w-5xl mx-auto p-6"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    const api = {
+      chat: (message) =>
+        fetch("/chat", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message })
+        }).then(r => r.json()),
+
+      start: (payload) =>
+        fetch("/monitor/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(r => r.json()),
+
+      stop: (key) =>
+        fetch(`/monitor/stop?key=${encodeURIComponent(key)}`, { method: "POST" })
+          .then(r => r.json()),
+    };
+
+    function Row({ label, children }) {
+      return (
+        <div className="grid grid-cols-12 gap-3 items-center my-2">
+          <div className="col-span-3 text-sm muted">{label}</div>
+          <div className="col-span-9">{children}</div>
+        </div>
+      );
+    }
+
+    function TextInput(props) {
+      return <input className="w-full px-3 py-2 rounded-lg outline-none" {...props} />;
+    }
+
+    function Section({ title, children, right }) {
+      return (
+        <div className="card rounded-2xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">{title}</h2>
+            {right}
+          </div>
+          {children}
+        </div>
+      );
+    }
+
+    function Table({ rows }) {
+      if (!rows?.length) return <div className="muted text-sm">No services found.</div>;
+      return (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left muted">
+              <tr>
+                <th className="py-2 pr-3">Origin</th>
+                <th className="py-2 pr-3">Destination</th>
+                <th className="py-2 pr-3">STD</th>
+                <th className="py-2 pr-3">ETD</th>
+                <th className="py-2 pr-3">Platform</th>
+                <th className="py-2 pr-3">Operator</th>
+                <th className="py-2 pr-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} className="hover:bg-slate-800/40">
+                  <td className="py-2 pr-3">{r.origin || "-"}</td>
+                  <td className="py-2 pr-3">{r.destination || "-"}</td>
+                  <td className="py-2 pr-3 mono">{r.std || "-"}</td>
+                  <td className="py-2 pr-3 mono">{r.etd || "-"}</td>
+                  <td className="py-2 pr-3 mono">{r.platform || "-"}</td>
+                  <td className="py-2 pr-3">{r.operator || "-"}</td>
+                  <td className={`py-2 pr-3 ${/cancel/i.test(r.status||"") ? "bad" : /delayed|late/i.test(r.status||"") ? "warn" : "ok"}`}>
+                    {r.status || "On time"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
+    function App() {
+      const [message, setMessage] = useState("next train from KGX to CBG after 18:30");
+      const [results, setResults] = useState([]);
+      const [intent, setIntent] = useState(null);
+      const [loading, setLoading] = useState(false);
+
+      const [origin, setOrigin] = useState("KGX");
+      const [dest, setDest] = useState("CBG");
+      const [when, setWhen] = useState("now");
+      const [email, setEmail] = useState("");
+      const [key, setKey] = useState("");
+
+      const ask = async () => {
+        setLoading(true);
+        try {
+          const data = await api.chat(message);
+          setIntent(data.intent || null);
+          setResults(data.results || []);
+        } catch (e) {
+          setResults([]);
+          setIntent(null);
+          alert("Chat failed: " + e);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const start = async () => {
+        setLoading(true);
+        try {
+          const payload = {
+            origin: (origin || "").toUpperCase(),
+            destination: (dest || "").toUpperCase(),
+            when: when || "now",
+            email: email || undefined,
+            key: key || undefined,
+          };
+          const r = await api.start(payload);
+          if (r?.key && !key) setKey(r.key);
+          alert("Monitor started" + (r.key ? ` (key: ${r.key})` : ""));
+        } catch (e) {
+          alert("Monitor start failed: " + e);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const stop = async () => {
+        if (!key) return alert("Enter the monitor key to stop (e.g. KGX->CBG@now)");
+        setLoading(true);
+        try {
+          const r = await api.stop(key);
+          alert("Monitor stopped");
+        } catch (e) {
+          alert("Monitor stop failed: " + e);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div>
+          <header className="mb-6">
+            <h1 className="text-2xl font-bold">UK Train Bot</h1>
+            <p className="muted mt-1 text-sm">Ask for trains in plain English, see live departures, and set email alerts for changes.</p>
+          </header>
+
+          <Section
+            title="Ask (Natural Language)"
+            right={<button className={`btn btn-primary ${loading ? "opacity-60" : ""}`} onClick={ask} disabled={loading}>Ask</button>}
+          >
+            <Row label="Question">
+              <TextInput value={message} onChange={e => setMessage(e.target.value)} placeholder='e.g., "next train from KGX to CBG after 18:30"' />
+            </Row>
+
+            {intent && (
+              <div className="rounded-lg bg-slate-800/40 p-3 mt-3 text-sm">
+                <div className="muted mb-1">Parsed intent</div>
+                <pre className="mono text-xs overflow-auto">{JSON.stringify(intent, null, 2)}</pre>
+              </div>
+            )}
+
+            <div className="mt-4">
+              <Table rows={results} />
+            </div>
+          </Section>
+
+          <Section title="Email Alerts (Monitor)">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              <TextInput value={origin} onChange={e => setOrigin(e.target.value)} placeholder="Origin CRS (KGX)" />
+              <TextInput value={dest} onChange={e => setDest(e.target.value)} placeholder="Destination CRS (CBG)" />
+              <TextInput value={when} onChange={e => setWhen(e.target.value)} placeholder='When ("now" or HH:MM)' />
+              <TextInput value={email} onChange={e => setEmail(e.target.value)} placeholder="Alert email (optional)" />
+              <TextInput value={key} onChange={e => setKey(e.target.value)} placeholder='Key (optional, auto)' />
+            </div>
+
+            <div className="flex gap-3 mt-3">
+              <button className={`btn btn-primary ${loading ? "opacity-60" : ""}`} onClick={start} disabled={loading}>Start Monitor</button>
+              <button className={`btn btn-secondary ${loading ? "opacity-60" : ""}`} onClick={stop} disabled={loading}>Stop Monitor</button>
+            </div>
+          </Section>
+
+          <footer className="muted text-xs mt-8">
+            Powered by your FastAPI backend · CRS example: KGX (King’s Cross), CBG (Cambridge), EUS (Euston)
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
